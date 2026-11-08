@@ -1,0 +1,168 @@
+{
+  "name": "Raíz Viva · Manejador global de errores",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "12ab0c66-680e-4fd3-b193-55184e1906f3",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d9917288-63f2-4bbd-996c-f4c86bfbd659",
+              "name": "email_responsable",
+              "value": "estudiocimientos@gmail.com",
+              "type": "string"
+            },
+            {
+              "id": "249984a9-4d5c-489d-803a-85e00414db12",
+              "name": "db_errores",
+              "value": "c95d72bdfe1d400ea5ed4db8387aaf00",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "d495d5f7-d454-4e9d-a419-a1f1393f5f21",
+      "name": "Configuración",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "value": "={{ $json.db_errores }}",
+          "mode": "id"
+        },
+        "title": "={{ 'Falla no controlada en ' + $json.workflow.name }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Tipo|select",
+              "selectValue": "API de IA"
+            },
+            {
+              "key": "Nodo|rich_text",
+              "textContent": "={{ $json.execution.lastNodeExecuted }}"
+            },
+            {
+              "key": "Detalle|rich_text",
+              "textContent": "={{ String($json.execution.error.message).slice(0, 1800) }}"
+            },
+            {
+              "key": "Ejecución n8n|rich_text",
+              "textContent": "={{ $json.execution.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "085845cf-dbda-4009-8405-ab3adb35be18",
+      "name": "Notion · Registrar falla no controlada",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Configuración').item.json.email_responsable }}",
+        "subject": "={{ '[CRÍTICO] Se detuvo el flujo ' + $('Error Trigger').item.json.workflow.name }}",
+        "emailType": "text",
+        "message": "={{ 'Nodo: ' + $('Error Trigger').item.json.execution.lastNodeExecuted + '\\nError: ' + $('Error Trigger').item.json.execution.error.message + '\\nVer ejecución: ' + $('Error Trigger').item.json.execution.url }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "ca9381fb-acbf-4f3a-8231-3ad44d763c63",
+      "name": "Gmail · Alerta crítica",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        672,
+        0
+      ],
+      "webhookId": "46c0bf56-d76f-4d0f-9502-ec6d41588a7c",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ovgekXmgbGvj9tPA",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Configuración",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuración": {
+      "main": [
+        [
+          {
+            "node": "Notion · Registrar falla no controlada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Registrar falla no controlada": {
+      "main": [
+        [
+          {
+            "node": "Gmail · Alerta crítica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "f0a9b6c3-9a8d-41fe-93e0-2e8915418a18",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9956cea7941ef6fbb35655534cd21bf4e5e96bcfe5ef1ebd7d136ce6185f344e"
+  },
+  "nodeGroups": [],
+  "id": "BvUuu1dEU1JBzRnl",
+  "tags": []
+}

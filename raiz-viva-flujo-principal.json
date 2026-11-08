@@ -1,0 +1,1668 @@
+{
+  "name": "Raíz Viva · Procesamiento de consultas con IA",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "databaseId": {
+          "__rl": true,
+          "value": "f4f106a9387a42c38e4e398799bdc873",
+          "mode": "id"
+        },
+        "simple": false
+      },
+      "id": "f91f840c-73f4-4246-a6b0-fec5bead517a",
+      "name": "Trigger · Nueva consulta en Notion",
+      "type": "n8n-nodes-base.notionTrigger",
+      "typeVersion": 1,
+      "position": [
+        48,
+        624
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "25355d6b-a457-4e6c-987c-e7f593159f0d",
+              "name": "negocio",
+              "value": "Raíz Viva – Vivero",
+              "type": "string"
+            },
+            {
+              "id": "aff7032d-96a3-4625-af73-4ecde1e16964",
+              "name": "email_responsable",
+              "value": "estudiocimientos@gmail.com",
+              "type": "string"
+            },
+            {
+              "id": "78fe331b-953b-4954-918d-7a2685367d4c",
+              "name": "modelo",
+              "value": "gpt-4o-mini",
+              "type": "string"
+            },
+            {
+              "id": "1b9fe212-8fe6-400d-96c3-64bc7dd44b73",
+              "name": "max_tokens",
+              "value": 500,
+              "type": "number"
+            },
+            {
+              "id": "cae3a535-95f9-4ce3-ad4f-b89b3b58fe82",
+              "name": "temperatura",
+              "value": 0.3,
+              "type": "number"
+            },
+            {
+              "id": "6f1543e2-a90a-4e6a-b1b9-1352f93fb3c4",
+              "name": "max_intentos",
+              "value": 3,
+              "type": "number"
+            },
+            {
+              "id": "7883c8cd-bf3d-47ba-ac11-07e2dbaaa671",
+              "name": "min_caracteres_mensaje",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "86821f58-82a7-4a5f-a4ab-48d36c3916ea",
+              "name": "db_clientes",
+              "value": "c6be2ca0142d48a692a94fd56e01d990",
+              "type": "string"
+            },
+            {
+              "id": "d475e7d6-7f80-4c60-85ae-ca7f3346b14a",
+              "name": "db_errores",
+              "value": "c95d72bdfe1d400ea5ed4db8387aaf00",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "0d8dca4d-9ea3-437a-bf72-870004bd89b1",
+      "name": "Configuración",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        272,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Lee las propiedades de la página de Notion por su nombre real,\n// valida los datos y aplica MINIMIZACIÓN: la IA nunca recibe email ni teléfono.\nconst cfg = $('Configuración').item.json;\nconst p = $json.properties || {};\n\nconst leer = (nombre) => {\n  const prop = p[nombre];\n  if (!prop) return '';\n  switch (prop.type) {\n    case 'title':        return (prop.title || []).map(t => t.plain_text).join('');\n    case 'rich_text':    return (prop.rich_text || []).map(t => t.plain_text).join('');\n    case 'email':        return prop.email || '';\n    case 'phone_number': return prop.phone_number || '';\n    case 'select':       return prop.select ? prop.select.name : '';\n    case 'number':       return prop.number ?? 0;\n    default:             return '';\n  }\n};\n\nconst email   = String(leer('Email remitente')).trim().toLowerCase();\nconst mensaje = String(leer('Mensaje')).trim();\nconst asunto  = String(leer('Asunto')).trim() || '(sin asunto)';\nconst nombre  = String(leer('Nombre del cliente')).trim();\nconst estado  = String(leer('Estado')).trim();\nconst intentos = Number(leer('Intentos')) || 0;\n\nconst emailValido = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email);\nconst faltantes = [];\nif (!emailValido) faltantes.push('email válido');\nif (mensaje.length < cfg.min_caracteres_mensaje) faltantes.push(`mensaje (mín. ${cfg.min_caracteres_mensaje} caracteres)`);\n\n// Anonimización antes de enviar a la IA\nconst mensajeAnonimizado = mensaje\n  .replace(/[^\\s@]+@[^\\s@]+\\.[^\\s@]+/g, '[EMAIL]')\n  .replace(/\\+?\\d[\\d\\s().-]{7,}\\d/g, '[TEL]')\n  .slice(0, 2000);\n\nreturn {\n  json: {\n    page_id: $json.id,\n    page_url: $json.url,\n    asunto,\n    mensaje,\n    mensaje_anonimizado: mensajeAnonimizado,\n    email,\n    nombre: nombre || email.split('@')[0],\n    primer_nombre: (nombre.split(' ')[0]) || 'cliente',\n    telefono: String(leer('Teléfono')),\n    estado,\n    intentos,\n    datos_completos: faltantes.length === 0,\n    faltantes: faltantes.join(', '),\n    // Filtro anti-bucle: solo se procesa si no fue tocada antes y no superó el máximo de intentos\n    procesable: (estado === '' || estado === 'Pendiente') && intentos < cfg.max_intentos,\n  }\n};"
+      },
+      "id": "bcbd4959-a395-40a6-bdb1-24522a18a4b9",
+      "name": "Normalizar y minimizar datos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e4b1b29a-444d-4cae-85d1-f1d7ebe5babe",
+              "leftValue": "={{ $json.procesable }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3c4f39d1-6705-4082-86d5-c68a4ca15273",
+      "name": "¿Procesable? (anti-bucle)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        704,
+        624
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "05b0c6c0-ca12-4acf-b0a4-0d9a6e0366dd",
+      "name": "Ignorar (ya procesada o límite de intentos)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        928,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6f23e83f-5c0c-4d52-9245-ff91df8b0f48",
+              "leftValue": "={{ $json.datos_completos }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2bfa1569-cd4c-4db7-ad92-e34a665f3246",
+      "name": "¿Datos completos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        928,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|select",
+              "selectValue": "Pendiente"
+            },
+            {
+              "key": "Canal de origen|select",
+              "selectValue": "Formulario web"
+            },
+            {
+              "key": "Intentos|number",
+              "numberValue": "={{ $('Normalizar y minimizar datos').item.json.intentos + 1 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "29b849f8-6a8f-4135-bf4d-62a5fbfdd879",
+      "name": "Notion · Marcar Pendiente (+1 intento)",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        1152,
+        528
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": {
+          "__rl": true,
+          "value": "={{ $('Configuración').item.json.db_clientes }}",
+          "mode": "id"
+        },
+        "limit": 1,
+        "filterType": "json",
+        "filterJson": "={{ JSON.stringify({ property: 'Email', email: { equals: $('Normalizar y minimizar datos').item.json.email } }) }}",
+        "options": {}
+      },
+      "id": "71268b72-9e35-4cb0-bc6d-c1fa93942fef",
+      "name": "Notion · Buscar cliente por email",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        1360,
+        528
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "da2a9c0c-29b1-48ba-a735-73fa80601eae",
+              "leftValue": "={{ $json.id }}",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "aa8c9ac7-43f0-4df7-bdfe-23a4ebe33bd7",
+      "name": "¿Cliente existe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1584,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "value": "={{ $('Configuración').item.json.db_clientes }}",
+          "mode": "id"
+        },
+        "title": "={{ $('Normalizar y minimizar datos').item.json.nombre }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Email|email",
+              "emailValue": "={{ $('Normalizar y minimizar datos').item.json.email }}"
+            },
+            {
+              "key": "Tipo de cliente|select",
+              "selectValue": "Desconocido"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c2086955-1c31-499b-acb3-7bbd5fa30a87",
+      "name": "Notion · Crear cliente",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        1808,
+        640
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Cliente|relation",
+              "relationValue": [
+                "={{ $json.id }}"
+              ]
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7fdb10b0-e156-4db8-a24b-08c94613fd6a",
+      "name": "Notion · Vincular cliente a la consulta",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        2032,
+        528
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Prompt dinámico: usa variables de Configuración y de la consulta.\nconst cfg = $('Configuración').item.json;\nconst c = $('Normalizar y minimizar datos').item.json;\n\nconst system = `Sos el asistente de atención al cliente de ${cfg.negocio}, un vivero online de Argentina que vende plantas de interior y exterior, macetas, sustratos y hace envíos.\nAnalizá la consulta y devolvé SOLO un objeto JSON válido con estas claves:\n- \"categoria\": exactamente una de [\"Venta minorista\",\"Pedido mayorista\",\"Reclamo\",\"Consulta de cuidado\",\"Spam\"]\n- \"prioridad\": \"Alta\" | \"Media\" | \"Baja\"\n- \"sentimiento\": \"Positivo\" | \"Neutro\" | \"Negativo\"\n- \"resumen\": máximo 25 palabras\n- \"respuesta\": borrador de email en español rioplatense, cordial, máximo 120 palabras, que empiece saludando a ${c.primer_nombre} y firme \"Equipo de ${cfg.negocio}\".\nReglas: no inventes precios, stock ni plazos (decí que un asesor los confirma). Los datos personales del mensaje fueron reemplazados por [EMAIL] o [TEL]: no los pidas. Si es spam, \"respuesta\" va vacía.`;\n\nconst user = `Asunto: ${c.asunto}\\nMensaje: ${c.mensaje_anonimizado}`;\n\nreturn {\n  json: {\n    body: {\n      model: cfg.modelo,\n      max_tokens: cfg.max_tokens,\n      temperature: cfg.temperatura,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: system },\n        { role: 'user', content: user },\n      ],\n    },\n  },\n};"
+      },
+      "id": "6c8f2d17-fc21-480a-ad95-9019180bbc91",
+      "name": "Construir prompt dinámico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "cad4cc9b-634d-4bdf-afaa-c19737f28730",
+      "name": "IA · Clasificar y redactar (OpenAI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2464,
+        528
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "openAiApi": {
+          "id": "ou2ye7iKijk7aKZa",
+          "name": "OpenAI account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Lee Message.Content de la respuesta de OpenAI y valida el JSON devuelto.\nconst cfg = $('Configuración').item.json;\nconst CATEGORIAS = ['Venta minorista', 'Pedido mayorista', 'Reclamo', 'Consulta de cuidado', 'Spam'];\nconst PRIORIDADES = ['Alta', 'Media', 'Baja'];\nconst SENTIMIENTOS = ['Positivo', 'Neutro', 'Negativo'];\n\nconst content = $json.choices?.[0]?.message?.content ?? '';\ntry {\n  const r = JSON.parse(content);\n  if (!CATEGORIAS.includes(r.categoria)) throw new Error(`Categoría inválida: \"${r.categoria}\"`);\n  const prioridad = PRIORIDADES.includes(r.prioridad) ? r.prioridad : 'Media';\n  const sentimiento = SENTIMIENTOS.includes(r.sentimiento) ? r.sentimiento : 'Neutro';\n  const respuesta = String(r.respuesta || '').trim();\n  if (r.categoria !== 'Spam' && respuesta.length < 20) throw new Error('La IA no devolvió una respuesta utilizable');\n\n  // Semáforo HITL: acciones críticas requieren aprobación humana\n  const requiere_aprobacion =\n    r.categoria === 'Pedido mayorista' || r.categoria === 'Reclamo' ||\n    sentimiento === 'Negativo' || prioridad === 'Alta';\n\n  return { json: {\n    ok: true,\n    categoria: r.categoria,\n    prioridad,\n    sentimiento,\n    resumen: String(r.resumen || '').slice(0, 300),\n    respuesta: respuesta.slice(0, 1900),\n    requiere_aprobacion,\n    es_spam: r.categoria === 'Spam',\n    tokens: Number($json.usage?.total_tokens) || 0,\n    modelo: cfg.modelo,\n  } };\n} catch (e) {\n  return { json: { ok: false, error: e.message, contenido_recibido: String(content).slice(0, 500) } };\n}"
+      },
+      "id": "16f0bb06-a989-412c-aaa5-40832c090634",
+      "name": "Parsear respuesta IA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2688,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "42cad939-3eeb-4578-87ed-b7dc32459ff6",
+              "leftValue": "={{ $json.ok }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "13f2f0bc-b25a-4bb3-8fb5-21c84be22ced",
+      "name": "¿Respuesta IA válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2912,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|select",
+              "selectValue": "Procesado por IA"
+            },
+            {
+              "key": "Categoría|select",
+              "selectValue": "={{ $('Parsear respuesta IA').item.json.categoria }}"
+            },
+            {
+              "key": "Prioridad|select",
+              "selectValue": "={{ $('Parsear respuesta IA').item.json.prioridad }}"
+            },
+            {
+              "key": "Sentimiento|select",
+              "selectValue": "={{ $('Parsear respuesta IA').item.json.sentimiento }}"
+            },
+            {
+              "key": "Resumen IA|rich_text",
+              "textContent": "={{ $('Parsear respuesta IA').item.json.resumen }}"
+            },
+            {
+              "key": "Respuesta propuesta|rich_text",
+              "textContent": "={{ $('Parsear respuesta IA').item.json.respuesta }}"
+            },
+            {
+              "key": "Modelo IA|select",
+              "selectValue": "={{ $('Parsear respuesta IA').item.json.modelo }}"
+            },
+            {
+              "key": "Tokens usados|number",
+              "numberValue": "={{ $('Parsear respuesta IA').item.json.tokens }}"
+            },
+            {
+              "key": "Requiere aprobación|checkbox",
+              "checkboxValue": "={{ $('Parsear respuesta IA').item.json.requiere_aprobacion }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6ecef088-6c62-4a2f-9183-01eddcac80fe",
+      "name": "Notion · Guardar resultado IA",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        3120,
+        368
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "7656d4ea-39d1-44f5-8f60-ce2306d34f4c",
+                    "leftValue": "={{ $('Parsear respuesta IA').item.json.es_spam }}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    },
+                    "rightValue": ""
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Spam"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "e508839b-f487-4399-8abf-295663177fc3",
+                    "leftValue": "={{ $('Parsear respuesta IA').item.json.requiere_aprobacion }}",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    },
+                    "rightValue": ""
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Requiere aprobación humana"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Respuesta automática"
+        }
+      },
+      "id": "f16aac37-5cc1-44ef-9aff-4bdc0ef8e63e",
+      "name": "Router · ¿Qué hacer con la consulta?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        3344,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|select",
+              "selectValue": "Descartado (spam)"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "75fb76e4-d3f4-48dc-8818-b75ec9f56b86",
+      "name": "Notion · Descartar spam",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        3568,
+        192
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|select",
+              "selectValue": "Esperando aprobación"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e93c910e-1857-4afc-a4fc-f7ff15b3551d",
+      "name": "Notion · Esperando aprobación",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        3568,
+        368
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "sendTo": "={{ $('Configuración').item.json.email_responsable }}",
+        "subject": "={{ '[Aprobación requerida] ' + $('Parsear respuesta IA').item.json.categoria + ' – ' + $('Normalizar y minimizar datos').item.json.asunto }}",
+        "message": "={{ 'Nueva consulta que requiere tu aprobación antes de responder al cliente.\\n\\nCategoría: ' + $('Parsear respuesta IA').item.json.categoria + ' | Prioridad: ' + $('Parsear respuesta IA').item.json.prioridad + ' | Sentimiento: ' + $('Parsear respuesta IA').item.json.sentimiento + '\\nResumen IA: ' + $('Parsear respuesta IA').item.json.resumen + '\\n\\n--- Mensaje del cliente ---\\n' + $('Normalizar y minimizar datos').item.json.mensaje + '\\n\\n--- Respuesta propuesta por la IA ---\\n' + $('Parsear respuesta IA').item.json.respuesta + '\\n\\nVer en Notion: ' + $('Normalizar y minimizar datos').item.json.page_url }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "Aprobar y enviar",
+            "disapproveLabel": "Rechazar"
+          }
+        },
+        "options": {}
+      },
+      "id": "0da64c62-2d12-418a-ab95-f1bd4ac76b77",
+      "name": "Gmail · Pedir aprobación (HITL)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3792,
+        368
+      ],
+      "webhookId": "90532c0b-2ed9-418b-9f7b-475056f19c24",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ovgekXmgbGvj9tPA",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8d5064e9-70cb-469e-a4c4-f15b421cbd39",
+              "leftValue": "={{ $json.data.approved }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a751620e-4ece-445a-b8c4-e394745936d1",
+      "name": "¿Aprobado por humano?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4000,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|select",
+              "selectValue": "Aprobado por Humano"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fdfa32c4-2317-48eb-9aa3-f85d67f42c7f",
+      "name": "Notion · Aprobado por Humano",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        4224,
+        288
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|select",
+              "selectValue": "Rechazado por Humano"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2801c324-d69a-40d4-88e2-470cc35e4504",
+      "name": "Notion · Rechazado por Humano",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        4224,
+        464
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Normalizar y minimizar datos').item.json.email }}",
+        "subject": "={{ 'Re: ' + $('Normalizar y minimizar datos').item.json.asunto }}",
+        "emailType": "text",
+        "message": "={{ $('Parsear respuesta IA').item.json.respuesta }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "={{ $('Configuración').item.json.negocio }}"
+        }
+      },
+      "id": "40e65d32-e7da-4dfd-9c8a-93098f3d7fb8",
+      "name": "Gmail · Responder al cliente",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        4448,
+        592
+      ],
+      "webhookId": "9e4b608b-4b20-4730-a1aa-ad3f647ee4e7",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ovgekXmgbGvj9tPA",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|select",
+              "selectValue": "Enviado"
+            },
+            {
+              "key": "Thread ID|rich_text",
+              "textContent": "={{ $json.threadId }}"
+            },
+            {
+              "key": "Fecha de respuesta|date",
+              "date": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "10640288-c53d-45f6-8622-de84323b6faa",
+      "name": "Notion · Marcar Enviado",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        4672,
+        512
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0822cbe8-56ae-4ada-b1e6-b5a3e45e7024",
+              "name": "page_id",
+              "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+              "type": "string"
+            },
+            {
+              "id": "97a9bdd5-e8fa-47f0-8071-6500406880a8",
+              "name": "titulo",
+              "value": "={{ 'Datos faltantes en ' + $('Normalizar y minimizar datos').item.json.asunto }}",
+              "type": "string"
+            },
+            {
+              "id": "a0f956f5-d281-4499-8375-d89ea17a6765",
+              "name": "tipo",
+              "value": "Datos faltantes",
+              "type": "string"
+            },
+            {
+              "id": "a2ba5142-1023-45f7-a59c-2f90985e763f",
+              "name": "nodo",
+              "value": "¿Datos completos?",
+              "type": "string"
+            },
+            {
+              "id": "c37093cc-936f-448c-b39d-11213f370ee7",
+              "name": "detalle",
+              "value": "={{ 'Faltan: ' + $('Normalizar y minimizar datos').item.json.faltantes }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2b1b48f5-d092-4521-9206-b160cea8aedf",
+      "name": "Error · Datos faltantes",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1152,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f2991e32-2999-424c-9a30-ec9c669a3ad2",
+              "name": "page_id",
+              "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15e33d93-ddb7-465f-9842-329e1684a897",
+              "name": "titulo",
+              "value": "Falla de la API de OpenAI (tras 3 reintentos)",
+              "type": "string"
+            },
+            {
+              "id": "c7e5bb08-8a29-41a1-9265-59a89b5f82ce",
+              "name": "tipo",
+              "value": "API de IA",
+              "type": "string"
+            },
+            {
+              "id": "f0ca967d-46a6-4927-8c4e-f89372df017a",
+              "name": "nodo",
+              "value": "IA · Clasificar y redactar (OpenAI)",
+              "type": "string"
+            },
+            {
+              "id": "808117ad-b387-4ad1-bf61-9459270ca318",
+              "name": "detalle",
+              "value": "={{ JSON.stringify($json.error || $json).slice(0, 1800) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d2577680-8722-4753-82fb-748d16a75cce",
+      "name": "Error · Falla API de IA",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2688,
+        752
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8c529884-8b7b-4daf-9e95-7e3f7bbfb918",
+              "name": "page_id",
+              "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+              "type": "string"
+            },
+            {
+              "id": "e935fb32-556f-46eb-8ae3-88a440d89690",
+              "name": "titulo",
+              "value": "La IA devolvió un JSON inválido",
+              "type": "string"
+            },
+            {
+              "id": "8f285273-56f5-4a72-b1db-a6eeb93651a4",
+              "name": "tipo",
+              "value": "Respuesta IA inválida",
+              "type": "string"
+            },
+            {
+              "id": "6d053ad5-0d91-4dfd-9444-394909dc8a12",
+              "name": "nodo",
+              "value": "Parsear respuesta IA",
+              "type": "string"
+            },
+            {
+              "id": "ef9965a3-a07d-448d-a9af-b57e22ef6993",
+              "name": "detalle",
+              "value": "={{ $json.error + ' | Recibido: ' + $json.contenido_recibido }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ad28bdf6-af7e-4ea5-9299-d837cf5ab4a4",
+      "name": "Error · Respuesta IA inválida",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3120,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1f69ab3-579e-44ff-a922-fd5d1266924f",
+              "name": "page_id",
+              "value": "={{ $('Normalizar y minimizar datos').item.json.page_id }}",
+              "type": "string"
+            },
+            {
+              "id": "5a74fddd-debf-4e9e-a2ac-6afe4fb04a67",
+              "name": "titulo",
+              "value": "No se pudo enviar el email al cliente",
+              "type": "string"
+            },
+            {
+              "id": "8cb89f57-2243-42df-a895-dcb11cc89ae4",
+              "name": "tipo",
+              "value": "Gmail",
+              "type": "string"
+            },
+            {
+              "id": "404e2b38-1067-40ca-98e9-ee4d31a04370",
+              "name": "nodo",
+              "value": "Gmail · Responder al cliente",
+              "type": "string"
+            },
+            {
+              "id": "7b1b7b6d-bb85-4e27-a21d-5656602404a9",
+              "name": "detalle",
+              "value": "={{ JSON.stringify($json.error || $json).slice(0, 1800) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "640fb4c8-0fb1-4839-b194-cc4e1a480cc2",
+      "name": "Error · Falla envío Gmail",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4672,
+        752
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Punto único de manejo de errores: todas las rutas de falla llegan acá\nreturn { json: { ...$json, ejecucion: $execution.id, fecha: new Date().toISOString() } };"
+      },
+      "id": "fd6c794a-4232-4f13-b581-fdc34dcb9372",
+      "name": "Unificar error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4944,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "value": "={{ $('Configuración').item.json.db_errores }}",
+          "mode": "id"
+        },
+        "title": "={{ $json.titulo }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Tipo|select",
+              "selectValue": "={{ $json.tipo }}"
+            },
+            {
+              "key": "Nodo|rich_text",
+              "textContent": "={{ $json.nodo }}"
+            },
+            {
+              "key": "Detalle|rich_text",
+              "textContent": "={{ $json.detalle }}"
+            },
+            {
+              "key": "Ejecución n8n|rich_text",
+              "textContent": "={{ $json.ejecucion }}"
+            },
+            {
+              "key": "Consulta|relation",
+              "relationValue": [
+                "={{ $json.page_id }}"
+              ]
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "03c8c376-4c77-4f9a-bca5-ae592ffb1c47",
+      "name": "Notion · Registrar en Log de errores",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        5168,
+        1024
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "value": "={{ $('Unificar error').item.json.page_id }}",
+          "mode": "id"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Estado|select",
+              "selectValue": "Error"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a6f03eaa-8f4d-425d-a26e-f63e7d94227a",
+      "name": "Notion · Marcar consulta en Error",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        5392,
+        1024
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "5Vx16lcQbz4zyvKD",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Configuración').item.json.email_responsable }}",
+        "subject": "={{ '[Error en el flujo] ' + $('Unificar error').item.json.tipo }}",
+        "emailType": "text",
+        "message": "={{ $('Unificar error').item.json.titulo + '\\nNodo: ' + $('Unificar error').item.json.nodo + '\\nDetalle: ' + $('Unificar error').item.json.detalle + '\\nEjecución: ' + $('Unificar error').item.json.ejecucion }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "887dc6ed-8b9a-4413-a757-19098d898ace",
+      "name": "Gmail · Alertar al responsable",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        5600,
+        1024
+      ],
+      "webhookId": "b0611751-9f95-4282-b4bb-00d43507e3e9",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "ovgekXmgbGvj9tPA",
+          "name": "Gmail account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## 1. Entrada y validación\nTrigger por nuevas páginas en la base **Consultas** (Notion). Configuración centralizada, normalización, anonimización y filtro anti-bucle.",
+        "height": 200,
+        "width": 1120
+      },
+      "id": "677d7fd0-17bf-4b78-9c13-6098664a8634",
+      "name": "Nota 33",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2. Memoria relacional\nBusca el cliente por email en **Clientes**; si no existe lo crea y lo vincula a la consulta.",
+        "height": 200,
+        "width": 1100,
+        "color": 5
+      },
+      "id": "9c4190c0-8f97-426d-b874-bbe3f75887b0",
+      "name": "Nota 34",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3. Motor de IA\ngpt-4o-mini · max_tokens 500 · JSON forzado · 3 reintentos · salida de error.",
+        "height": 200,
+        "width": 860,
+        "color": 4
+      },
+      "id": "dae4b3aa-5357-46f6-8705-3ac78d8073ad",
+      "name": "Nota 35",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2224,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 4. Human-in-the-loop\nMayoristas, reclamos, sentimiento negativo o prioridad alta esperan aprobación por email antes de contactar al cliente.",
+        "height": 220,
+        "width": 1120,
+        "color": 3
+      },
+      "id": "13ffc8d1-58e0-4fd6-884a-3f97fd637744",
+      "name": "Nota 36",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3328,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 5. Resiliencia\nTodas las fallas se registran en **Log de errores**, la consulta pasa a estado Error y se alerta al responsable.",
+        "height": 180,
+        "width": 900,
+        "color": 2
+      },
+      "id": "bf2e36e7-e367-472c-a2d3-2fe716952e0d",
+      "name": "Nota 37",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        4912,
+        832
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Trigger · Nueva consulta en Notion": {
+      "main": [
+        [
+          {
+            "node": "Configuración",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuración": {
+      "main": [
+        [
+          {
+            "node": "Normalizar y minimizar datos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar y minimizar datos": {
+      "main": [
+        [
+          {
+            "node": "¿Procesable? (anti-bucle)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Procesable? (anti-bucle)": {
+      "main": [
+        [
+          {
+            "node": "¿Datos completos?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ignorar (ya procesada o límite de intentos)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Datos completos?": {
+      "main": [
+        [
+          {
+            "node": "Notion · Marcar Pendiente (+1 intento)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error · Datos faltantes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Marcar Pendiente (+1 intento)": {
+      "main": [
+        [
+          {
+            "node": "Notion · Buscar cliente por email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Buscar cliente por email": {
+      "main": [
+        [
+          {
+            "node": "¿Cliente existe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Cliente existe?": {
+      "main": [
+        [
+          {
+            "node": "Notion · Vincular cliente a la consulta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notion · Crear cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Crear cliente": {
+      "main": [
+        [
+          {
+            "node": "Notion · Vincular cliente a la consulta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Vincular cliente a la consulta": {
+      "main": [
+        [
+          {
+            "node": "Construir prompt dinámico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir prompt dinámico": {
+      "main": [
+        [
+          {
+            "node": "IA · Clasificar y redactar (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA · Clasificar y redactar (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Parsear respuesta IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error · Falla API de IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear respuesta IA": {
+      "main": [
+        [
+          {
+            "node": "¿Respuesta IA válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Respuesta IA válida?": {
+      "main": [
+        [
+          {
+            "node": "Notion · Guardar resultado IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error · Respuesta IA inválida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Guardar resultado IA": {
+      "main": [
+        [
+          {
+            "node": "Router · ¿Qué hacer con la consulta?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Router · ¿Qué hacer con la consulta?": {
+      "main": [
+        [
+          {
+            "node": "Notion · Descartar spam",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notion · Esperando aprobación",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail · Responder al cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Esperando aprobación": {
+      "main": [
+        [
+          {
+            "node": "Gmail · Pedir aprobación (HITL)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail · Pedir aprobación (HITL)": {
+      "main": [
+        [
+          {
+            "node": "¿Aprobado por humano?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Aprobado por humano?": {
+      "main": [
+        [
+          {
+            "node": "Notion · Aprobado por Humano",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notion · Rechazado por Humano",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Aprobado por Humano": {
+      "main": [
+        [
+          {
+            "node": "Gmail · Responder al cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail · Responder al cliente": {
+      "main": [
+        [
+          {
+            "node": "Notion · Marcar Enviado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error · Falla envío Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error · Datos faltantes": {
+      "main": [
+        [
+          {
+            "node": "Unificar error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error · Falla API de IA": {
+      "main": [
+        [
+          {
+            "node": "Unificar error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error · Respuesta IA inválida": {
+      "main": [
+        [
+          {
+            "node": "Unificar error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error · Falla envío Gmail": {
+      "main": [
+        [
+          {
+            "node": "Unificar error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unificar error": {
+      "main": [
+        [
+          {
+            "node": "Notion · Registrar en Log de errores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Registrar en Log de errores": {
+      "main": [
+        [
+          {
+            "node": "Notion · Marcar consulta en Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion · Marcar consulta en Error": {
+      "main": [
+        [
+          {
+            "node": "Gmail · Alertar al responsable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "America/Argentina/Buenos_Aires",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "errorWorkflow": "BvUuu1dEU1JBzRnl"
+  },
+  "versionId": "99e8f407-1c6f-43ed-9790-20f14276fdf1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9956cea7941ef6fbb35655534cd21bf4e5e96bcfe5ef1ebd7d136ce6185f344e"
+  },
+  "nodeGroups": [],
+  "id": "I6zuKaU6wQv5Aw9s",
+  "tags": []
+}
